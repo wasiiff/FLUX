@@ -1,13 +1,17 @@
 import { streamText } from "ai";
+import { NextResponse } from "next/server";
 import { models } from "@/lib/ai/provider";
 import { SYSTEM } from "@/lib/ai/prompts";
 import { requireUser } from "@/lib/auth/session";
 import { limiters } from "@/lib/redis";
-import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+/**
+ * Streaming chat endpoint — used by inline AI suggestions in the editor.
+ * Routes through Vercel AI Gateway via the AI SDK string-model interface.
+ */
 export async function POST(req: Request) {
   const user = await requireUser();
   const limiter = limiters.ai();
@@ -22,5 +26,5 @@ export async function POST(req: Request) {
     messages,
     temperature: 0.4,
   });
-  return result.toDataStreamResponse();
+  return result.toUIMessageStreamResponse();
 }

@@ -10,10 +10,19 @@ const ServerEnv = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
-  ANTHROPIC_API_KEY: z.string().optional(),
-  AI_GATEWAY_URL: z.string().url().optional(),
-  AI_MODEL_PRIMARY: z.string().default("claude-sonnet-4-6"),
-  AI_MODEL_FAST: z.string().default("claude-haiku-4-5-20251001"),
+  /**
+   * Vercel AI Gateway — one key, hundreds of models.
+   * On Vercel, this is auto-injected via OIDC tokens; locally, set explicitly.
+   * Reference: https://vercel.com/docs/ai-gateway
+   */
+  AI_GATEWAY_API_KEY: z.string().optional(),
+
+  /**
+   * Default model IDs in `provider/model-id` format. Swap freely without code changes.
+   * Browse: https://vercel.com/ai-gateway/models
+   */
+  AI_MODEL_PRIMARY: z.string().default("anthropic/claude-opus-4.7"),
+  AI_MODEL_FAST: z.string().default("anthropic/claude-haiku-4.5"),
 
   UPSTASH_REDIS_REST_URL: z.string().url().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),

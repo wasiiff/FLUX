@@ -7,8 +7,8 @@ import { aiRuns } from "@/db/schema/ai";
 import { atsScores, jobDescriptions } from "@/db/schema/jobs";
 import { requireUser } from "@/lib/auth/session";
 import { runOptimization } from "@/lib/ai/graph";
+import { models } from "@/lib/ai/provider";
 import { limiters } from "@/lib/redis";
-import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -47,7 +47,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       resumeId: id,
       kind: "rewrite",
       status: "running",
-      model: env.AI_MODEL_PRIMARY,
+      model: models.primary,
     })
     .returning();
 
@@ -104,15 +104,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           status: "completed",
           completedAt: new Date(),
           latencyMs: Date.now() - startedAt,
+          inputTokens: out.tokensIn,
+          outputTokens: out.tokensOut,
           graphState: {
             jdExtraction: out.jdExtraction,
-            scoreOverall: out.score?.overall,
+            scoreOverall: out.score?.overall ?? null,
           },
         })
         .where(eq(aiRuns.id, run.id));
     }
 
-    log.info("optimization complete", { latencyMs: Date.now() - startedAt });
+    log.info("optimization complete", {
+      latencyMs: Date.now() - startedAt,
+      tokensIn: out.tokensIn,
+      tokensOut: out.tokensOut,
+      model: models.primary,
+    });
 
     return NextResponse.json({
       score: out.score,

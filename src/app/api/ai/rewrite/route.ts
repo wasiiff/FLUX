@@ -21,6 +21,9 @@ const INTENT_NUDGE: Record<z.infer<typeof Body>["intent"], string> = {
   quantify: "Add concrete metrics where reasonable; do not invent numbers.",
 };
 
+/**
+ * One-shot rewrite endpoint. Uses the fast model via Vercel AI Gateway.
+ */
 export async function POST(req: Request) {
   const user = await requireUser();
   const limiter = limiters.ai();

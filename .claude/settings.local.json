@@ -3,7 +3,9 @@
     "allow": [
       "Bash(claude mcp *)",
       "mcp__stitch__get_project",
-      "mcp__stitch__get_screen"
+      "mcp__stitch__get_screen",
+      "WebFetch(domain:ai-sdk.dev)",
+      "WebFetch(domain:vercel.com)"
     ]
   }
 }

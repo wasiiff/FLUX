@@ -1,16 +1,18 @@
 import "server-only";
 import { Annotation, StateGraph, END, START } from "@langchain/langgraph";
-import { ChatAnthropic } from "@langchain/anthropic";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { env } from "@/lib/env";
+import { generateText } from "ai";
+import { models } from "./provider";
 import { SYSTEM } from "./prompts";
 import { JdExtractionSchema, type JdExtraction, AtsScoreSchema, type AtsScore } from "./schemas";
 import { ResumeContentSchema, type ResumeContent } from "@/lib/resume/types";
 import { scoreResume } from "@/lib/ats/scorer";
 
 /**
- * LangGraph: extract → analyze (JD) → rewrite (resume) → score
- * State carries raw inputs, intermediate parses, and the final artifact.
+ * LangGraph orchestration:  analyze → rewrite → score
+ *
+ * Each node calls Vercel AI Gateway via the AI SDK (string model IDs route
+ * through https://ai-gateway.vercel.sh when AI_GATEWAY_API_KEY is set).
+ * No direct provider SDKs are imported — switching models is a config change.
  */
 
 const State = Annotation.Root({
@@ -28,32 +30,28 @@ const State = Annotation.Root({
     reducer: (_, next) => next,
     default: () => null,
   }),
-  error: Annotation<string | null>({
-    reducer: (_, next) => next,
-    default: () => null,
-  }),
-});
-
-const llm = new ChatAnthropic({
-  apiKey: env.ANTHROPIC_API_KEY ?? "",
-  model: env.AI_MODEL_PRIMARY,
-  temperature: 0.2,
+  tokensIn: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }),
+  tokensOut: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }),
+  error: Annotation<string | null>({ reducer: (_, next) => next, default: () => null }),
 });
 
 async function analyzeJD(state: typeof State.State) {
   if (!state.jobDescription?.trim()) {
     return { jdExtraction: { hardSkills: [], softSkills: [], responsibilities: [] } };
   }
-  const res = await llm.invoke([
-    new SystemMessage(SYSTEM.jdAnalyzer),
-    new HumanMessage(
-      `Analyze this job description and return JSON only.\n\n<job>\n${state.jobDescription}\n</job>`,
-    ),
-  ]);
-  const text = typeof res.content === "string" ? res.content : JSON.stringify(res.content);
-  const json = extractJson(text);
-  const parsed = JdExtractionSchema.safeParse(json);
-  return parsed.success ? { jdExtraction: parsed.data } : { error: "JD analysis failed" };
+  const { text, usage } = await generateText({
+    model: models.primary,
+    system: SYSTEM.jdAnalyzer,
+    prompt: `Analyze this job description and return JSON only.\n\n<job>\n${state.jobDescription}\n</job>`,
+    temperature: 0.1,
+  });
+  const parsed = JdExtractionSchema.safeParse(extractJson(text));
+  return {
+    jdExtraction: parsed.success ? parsed.data : null,
+    tokensIn: usage?.inputTokens ?? 0,
+    tokensOut: usage?.outputTokens ?? 0,
+    ...(parsed.success ? {} : { error: "JD analysis failed" }),
+  };
 }
 
 async function rewriteResume(state: typeof State.State) {
@@ -62,21 +60,23 @@ async function rewriteResume(state: typeof State.State) {
     ...state.jdExtraction.hardSkills,
     ...state.jdExtraction.softSkills,
   ];
-  const res = await llm.invoke([
-    new SystemMessage(SYSTEM.resumeArchitect),
-    new HumanMessage(
-      [
-        "Rewrite this resume to align with the target keywords while preserving truthfulness.",
-        `Target keywords: ${targetKeywords.join(", ")}`,
-        "Return strict JSON conforming to the resume schema. No prose.",
-        `<resume>${JSON.stringify(state.resume)}</resume>`,
-      ].join("\n\n"),
-    ),
-  ]);
-  const text = typeof res.content === "string" ? res.content : JSON.stringify(res.content);
-  const json = extractJson(text);
-  const parsed = ResumeContentSchema.safeParse(json);
-  return parsed.success ? { rewrittenResume: parsed.data } : { rewrittenResume: state.resume };
+  const { text, usage } = await generateText({
+    model: models.primary,
+    system: SYSTEM.resumeArchitect,
+    prompt: [
+      "Rewrite this resume to align with the target keywords while preserving truthfulness.",
+      `Target keywords: ${targetKeywords.join(", ")}`,
+      "Return strict JSON conforming to the resume schema. No prose, no markdown.",
+      `<resume>${JSON.stringify(state.resume)}</resume>`,
+    ].join("\n\n"),
+    temperature: 0.3,
+  });
+  const parsed = ResumeContentSchema.safeParse(extractJson(text));
+  return {
+    rewrittenResume: parsed.success ? parsed.data : state.resume,
+    tokensIn: usage?.inputTokens ?? 0,
+    tokensOut: usage?.outputTokens ?? 0,
+  };
 }
 
 function deterministicScore(state: typeof State.State) {
@@ -91,19 +91,20 @@ function deterministicScore(state: typeof State.State) {
 
 function extractJson(s: string): unknown {
   const trimmed = s.trim();
-  // Strip markdown code fences.
+  // Strip markdown code fences if the model adds them despite instructions.
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const body = fenced?.[1] ?? trimmed;
   try {
     return JSON.parse(body);
   } catch {
-    // Try to slice the first { ... } block.
     const start = body.indexOf("{");
     const end = body.lastIndexOf("}");
     if (start >= 0 && end > start) {
       try {
         return JSON.parse(body.slice(start, end + 1));
-      } catch {}
+      } catch {
+        /* fall through */
+      }
     }
     return {};
   }
@@ -121,11 +122,13 @@ export function buildOptimizationGraph() {
     .compile();
 }
 
-export type OptimizationOutput = {
+export interface OptimizationOutput {
   jdExtraction: JdExtraction | null;
   rewrittenResume: ResumeContent | null;
   score: AtsScore | null;
-};
+  tokensIn: number;
+  tokensOut: number;
+}
 
 export async function runOptimization(input: {
   resume: ResumeContent;
@@ -137,5 +140,7 @@ export async function runOptimization(input: {
     jdExtraction: result.jdExtraction ?? null,
     rewrittenResume: result.rewrittenResume ?? null,
     score: result.score ?? null,
+    tokensIn: result.tokensIn ?? 0,
+    tokensOut: result.tokensOut ?? 0,
   };
 }
