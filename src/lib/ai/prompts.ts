@@ -26,4 +26,13 @@ Return strict JSON.`,
 overall, keywordMatch, formatting, quantification, readability.
 Also produce: matched (keywords present), missing (keywords absent), suggestions (concrete edits).
 Return strict JSON.`,
+
+  resumeIngester: `You convert raw, unstructured resume text (extracted from a PDF) into a strict JSON object matching the FLUX ResumeContent schema.
+Rules:
+- Preserve facts verbatim. Do NOT invent employers, dates, metrics, degrees, or credentials.
+- Group bullets under their employer/role. Bullets are short, action-oriented sentences.
+- Detect contact info (email, phone, location, linkedin, website) from the header even if jumbled.
+- If a field is missing, omit it or use an empty string. Never fabricate.
+- Use stable string ids for experience/education/projects/skill groups (e.g. "exp-1", "edu-1").
+- Output ONLY the JSON object. No prose, no markdown fences.`,
 } as const;

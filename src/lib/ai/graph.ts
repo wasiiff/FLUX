@@ -114,11 +114,11 @@ export function buildOptimizationGraph() {
   return new StateGraph(State)
     .addNode("analyze", analyzeJD)
     .addNode("rewrite", rewriteResume)
-    .addNode("score", deterministicScore)
+    .addNode("scoring", deterministicScore)
     .addEdge(START, "analyze")
     .addEdge("analyze", "rewrite")
-    .addEdge("rewrite", "score")
-    .addEdge("score", END)
+    .addEdge("rewrite", "scoring")
+    .addEdge("scoring", END)
     .compile();
 }
 

@@ -5,7 +5,19 @@
       "mcp__stitch__get_project",
       "mcp__stitch__get_screen",
       "WebFetch(domain:ai-sdk.dev)",
-      "WebFetch(domain:vercel.com)"
+      "WebFetch(domain:vercel.com)",
+      "Bash(pnpm add *)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm next *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm build *)",
+      "Bash(npx tsx *)",
+      "Bash(node --require ./scripts/stub-server-only.cjs --import tsx scripts/test-import.ts Wasif.pdf)",
+      "Bash(curl *)",
+      "Bash(node --require ./scripts/stub-server-only.cjs --import tsx scripts/test-pdf-render.ts Wasif.pdf out-test.pdf)",
+      "Bash(xxd)",
+      "WebFetch(domain:www.overleaf.com)",
+      "Bash(node --require ./scripts/stub-server-only.cjs --import tsx scripts/test-pdf-render.ts Wasif.pdf out-faangpath.pdf)"
     ]
   }
 }

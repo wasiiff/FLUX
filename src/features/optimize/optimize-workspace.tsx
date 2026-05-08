@@ -1,47 +1,118 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MaterialSymbol } from "@/components/ui/icon";
 import { Badge } from "@/components/ui/badge";
 import type { Resume } from "@/db/schema/resumes";
 import { cn } from "@/lib/utils";
 
-type Stage = "idle" | "extracting" | "analyzing" | "rewriting" | "scoring" | "done" | "error";
+type Stage = "idle" | "uploading" | "extracting" | "analyzing" | "rewriting" | "scoring" | "done" | "error";
+type Mode = "existing" | "upload";
 
 interface Props {
   resumes: Resume[];
 }
 
+const MAX_PDF_BYTES = 8 * 1024 * 1024;
+
 export function OptimizeWorkspace({ resumes }: Props) {
+  const router = useRouter();
+  const [mode, setMode] = useState<Mode>(resumes.length > 0 ? "existing" : "upload");
   const [resumeId, setResumeId] = useState<string>(resumes[0]?.id ?? "");
   const [role, setRole] = useState("");
   const [jd, setJd] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [stage, setStage] = useState<Stage>("idle");
   const [pending, start] = useTransition();
-  const [result, setResult] = useState<{ score?: number; missing?: string[] } | null>(null);
+  const [result, setResult] = useState<{ score?: number; missing?: string[]; resumeId?: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const stages: { key: Stage; label: string; description: string }[] = [
-    { key: "extracting", label: "Document Ingestion", description: "Parsing structural formatting and chronological history." },
-    { key: "analyzing", label: "Mapping Executive Achievements", description: "Quantifying impact metrics and strategic initiatives." },
-    { key: "rewriting", label: "Aligning Narrative", description: "Rewriting bullets to mirror target competencies." },
-    { key: "scoring", label: "Computing ATS Score", description: "Evaluating across keyword match, quantification, formatting, readability." },
-  ];
+  const stages: { key: Stage; label: string; description: string }[] =
+    mode === "upload"
+      ? [
+          { key: "uploading", label: "Document Ingestion", description: "Parsing PDF and extracting structured content." },
+          { key: "analyzing", label: "Mapping Achievements", description: "Quantifying impact metrics and strategic initiatives." },
+          { key: "rewriting", label: "Aligning Narrative", description: "Rewriting bullets to mirror target competencies." },
+          { key: "scoring", label: "Computing ATS Score", description: "Evaluating keyword match, quantification, formatting, readability." },
+        ]
+      : [
+          { key: "extracting", label: "Document Ingestion", description: "Parsing structural formatting and chronological history." },
+          { key: "analyzing", label: "Mapping Achievements", description: "Quantifying impact metrics and strategic initiatives." },
+          { key: "rewriting", label: "Aligning Narrative", description: "Rewriting bullets to mirror target competencies." },
+          { key: "scoring", label: "Computing ATS Score", description: "Evaluating keyword match, quantification, formatting, readability." },
+        ];
 
   const stageIndex = (s: Stage) => stages.findIndex((x) => x.key === s);
 
+  function pickFile(f: File | null) {
+    if (!f) {
+      setFile(null);
+      return;
+    }
+    if (f.type && f.type !== "application/pdf") {
+      toast.error("PDF only");
+      return;
+    }
+    if (f.size > MAX_PDF_BYTES) {
+      toast.error("PDF must be ≤ 8 MB");
+      return;
+    }
+    setFile(f);
+  }
+
   function run() {
-    if (!resumeId || !jd.trim()) {
-      toast.error("Select a resume and paste a job description");
+    if (jd.trim().length < 20) {
+      toast.error("Paste a job description (≥ 20 characters)");
+      return;
+    }
+    if (mode === "existing" && !resumeId) {
+      toast.error("Select a resume first");
+      return;
+    }
+    if (mode === "upload" && !file) {
+      toast.error("Upload your resume PDF");
       return;
     }
 
     start(async () => {
       try {
+        if (mode === "upload" && file) {
+          setStage("uploading");
+          const fd = new FormData();
+          fd.set("file", file);
+          fd.set("jobDescription", jd);
+          if (role) fd.set("targetRole", role);
+          fd.set("title", file.name.replace(/\.pdf$/i, ""));
+
+          setStage("analyzing");
+          const res = await fetch("/api/resumes/import", { method: "POST", body: fd });
+          if (!res.ok) {
+            const j = await res.json().catch(() => ({}));
+            throw new Error(j.message || j.error || "Import failed");
+          }
+          setStage("rewriting");
+          const json = await res.json();
+          setStage("scoring");
+          await wait(250);
+          setResult({
+            score: json.score?.overall,
+            missing: json.score?.missing,
+            resumeId: json.resumeId,
+          });
+          setStage("done");
+          toast.success("Resume created — opening editor");
+          router.push(`/editor/${json.resumeId}`);
+          return;
+        }
+
+        // Existing-resume flow
         setStage("extracting");
-        await wait(400);
+        await wait(300);
         setStage("analyzing");
         const res = await fetch(`/api/resumes/${resumeId}/optimize`, {
           method: "POST",
@@ -52,14 +123,18 @@ export function OptimizeWorkspace({ resumes }: Props) {
         setStage("rewriting");
         const json = await res.json();
         setStage("scoring");
-        await wait(300);
-        setResult({ score: json.score?.overall, missing: json.score?.missing });
+        await wait(250);
+        setResult({
+          score: json.score?.overall,
+          missing: json.score?.missing,
+          resumeId,
+        });
         setStage("done");
         toast.success("Optimization complete");
       } catch (err) {
         console.error(err);
         setStage("error");
-        toast.error("Optimization failed");
+        toast.error(err instanceof Error ? err.message : "Optimization failed");
       }
     });
   }
@@ -80,24 +155,93 @@ export function OptimizeWorkspace({ resumes }: Props) {
             <h2 className="font-h3 text-h3 text-primary">Source Material</h2>
             <Badge variant="outline">Step 1</Badge>
           </div>
-          <div>
-            <Label>Choose Resume</Label>
-            <select
-              value={resumeId}
-              onChange={(e) => setResumeId(e.target.value)}
-              className="w-full bg-surface-container-low border-b border-outline-variant py-3 px-4 font-body-md text-body-md text-on-surface focus:outline-none focus:border-primary"
-            >
-              {resumes.length === 0 ? (
-                <option value="">No resumes yet — create one first</option>
-              ) : (
-                resumes.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.title}
-                  </option>
-                ))
-              )}
-            </select>
-          </div>
+
+          <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
+            <TabsList>
+              <TabsTrigger value="existing" disabled={resumes.length === 0}>
+                <MaterialSymbol name="folder_open" opticalSize={18} className="mr-2" />
+                Pick existing
+              </TabsTrigger>
+              <TabsTrigger value="upload">
+                <MaterialSymbol name="upload_file" opticalSize={18} className="mr-2" />
+                Upload PDF
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="existing">
+              <Label>Choose Resume</Label>
+              <select
+                value={resumeId}
+                onChange={(e) => setResumeId(e.target.value)}
+                className="w-full bg-surface-container-low border-b border-outline-variant py-3 px-4 font-body-md text-body-md text-on-surface focus:outline-none focus:border-primary"
+              >
+                {resumes.length === 0 ? (
+                  <option value="">No resumes yet — upload a PDF instead</option>
+                ) : (
+                  resumes.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.title}
+                    </option>
+                  ))
+                )}
+              </select>
+            </TabsContent>
+
+            <TabsContent value="upload">
+              <Label>Resume PDF</Label>
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  pickFile(e.dataTransfer.files[0] ?? null);
+                }}
+                onClick={() => fileRef.current?.click()}
+                className={cn(
+                  "border border-dashed border-outline-variant bg-surface-container-low p-8 text-center cursor-pointer hover:border-primary transition-colors",
+                  file && "border-primary",
+                )}
+              >
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="hidden"
+                  onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+                />
+                {file ? (
+                  <div className="flex items-center justify-center gap-3">
+                    <MaterialSymbol name="picture_as_pdf" opticalSize={24} className="text-primary" />
+                    <div className="text-left">
+                      <p className="font-body-md text-body-md text-on-surface">{file.name}</p>
+                      <p className="font-label-caps text-label-caps text-on-surface-variant">
+                        {(file.size / 1024).toFixed(0)} KB
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pickFile(null);
+                      }}
+                    >
+                      <MaterialSymbol name="close" opticalSize={18} />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <MaterialSymbol name="cloud_upload" opticalSize={32} className="text-on-surface-variant" />
+                    <p className="font-body-md text-body-md text-on-surface">
+                      Drop PDF here or click to browse
+                    </p>
+                    <p className="font-label-caps text-label-caps text-on-surface-variant">
+                      PDF only · max 8 MB
+                    </p>
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
         </section>
 
         <section className="border border-outline-variant bg-surface-container-lowest p-8">
@@ -121,6 +265,7 @@ export function OptimizeWorkspace({ resumes }: Props) {
                 value={jd}
                 onChange={(e) => setJd(e.target.value)}
                 placeholder="Paste the target job description or core requirements here…"
+                maxLength={5000}
               />
               <p className="font-label-caps text-label-caps text-on-surface-variant mt-2 text-right">
                 {jd.length} / 5000 chars
@@ -130,8 +275,17 @@ export function OptimizeWorkspace({ resumes }: Props) {
         </section>
 
         <div className="flex justify-end">
-          <Button size="lg" variant="ai" onClick={run} disabled={pending || !resumeId}>
-            {pending ? "Running…" : "Initialize Optimization"}
+          <Button
+            size="lg"
+            variant="ai"
+            onClick={run}
+            disabled={pending || (mode === "existing" && !resumeId) || (mode === "upload" && !file)}
+          >
+            {pending
+              ? "Running…"
+              : mode === "upload"
+                ? "Generate ATS Resume"
+                : "Initialize Optimization"}
             <MaterialSymbol name="arrow_forward" opticalSize={20} />
           </Button>
         </div>
@@ -149,7 +303,13 @@ export function OptimizeWorkspace({ resumes }: Props) {
               const state =
                 stage === "done" || cur > i ? "done" : cur === i ? "active" : "pending";
               return (
-                <StageRow key={s.key} state={state} {...s} isLast={i === stages.length - 1} />
+                <StageRow
+                  key={s.key}
+                  state={state}
+                  label={s.label}
+                  description={s.description}
+                  isLast={i === stages.length - 1}
+                />
               );
             })}
           </div>
@@ -177,6 +337,17 @@ export function OptimizeWorkspace({ resumes }: Props) {
                   </div>
                 </div>
               ) : null}
+              {result.resumeId ? (
+                <Button
+                  variant="ai"
+                  size="sm"
+                  className="mt-6 w-full"
+                  onClick={() => router.push(`/editor/${result.resumeId}`)}
+                >
+                  Open in Editor
+                  <MaterialSymbol name="arrow_forward" opticalSize={18} />
+                </Button>
+              ) : null}
             </div>
           ) : null}
 
@@ -184,8 +355,9 @@ export function OptimizeWorkspace({ resumes }: Props) {
             <div className="bg-surface p-4 border border-outline-variant flex items-start gap-3">
               <MaterialSymbol name="info" opticalSize={20} className="text-primary shrink-0" />
               <p className="font-body-md text-body-md text-on-surface-variant">
-                The extraction engine requires both source material and target parameters to begin
-                the gap analysis phase.
+                {mode === "upload"
+                  ? "Upload your existing PDF and a target JD. We'll parse, restructure, and align it for ATS — then open it in the live editor."
+                  : "Pick an existing resume and target JD. We'll align it for ATS — then return a score and missing keywords."}
               </p>
             </div>
           </div>

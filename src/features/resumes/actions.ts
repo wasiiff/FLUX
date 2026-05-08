@@ -53,11 +53,11 @@ export async function snapshotVersion(id: string, label?: string) {
     .limit(1);
   if (!resume) throw new Error("Resume not found");
 
-  const [{ next }] = await db
+  const [maxRow] = await db
     .select({ next: max(resumeVersions.versionNumber) })
     .from(resumeVersions)
     .where(eq(resumeVersions.resumeId, id));
-  const versionNumber = (next ?? 0) + 1;
+  const versionNumber = (maxRow?.next ?? 0) + 1;
 
   const [version] = await db
     .insert(resumeVersions)

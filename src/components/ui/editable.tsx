@@ -49,7 +49,10 @@ export const Editable = React.forwardRef<HTMLElement, EditableProps>(function Ed
     if (next !== value) onChange(next);
   }
 
-  const props: React.HTMLAttributes<HTMLElement> & { contentEditable: boolean } = {
+  const props: React.HTMLAttributes<HTMLElement> & {
+    contentEditable: boolean;
+    "data-placeholder"?: string;
+  } = {
     contentEditable: true,
     suppressContentEditableWarning: true,
     "data-placeholder": placeholder,
